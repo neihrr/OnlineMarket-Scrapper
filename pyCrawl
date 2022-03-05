@@ -1,0 +1,102 @@
+import requests
+from bs4 import BeautifulSoup
+from pymongo import MongoClient
+import redis
+import redisTransfer
+import psycopg2
+import createTables
+import datetime
+import json
+
+CarrefourData = redis.Redis()
+
+productNames = []
+productUrls = []
+productPrices = []
+productSkus = []
+productCategories = []
+
+SiteContent = None
+
+
+
+def writeFile(arrangedHTML):
+    file = open('arranged.txt','w+')
+    file.write(str(arrangedHTML))
+ 
+
+
+def main():
+    url_Extensions = ["/meyve-sebze/c/1014", 
+    "/et-balik-kumes/c/1044",
+    "/sut-kahvaltilik/c/1310", 
+    "/gida-sekerleme/c/1110", 
+    "/icecekler/c/1409", 
+    "/bebek-dunyasi/c/1846",
+    "/temizlik-urunleri/c/1556",
+    "/kagit-kozmetik/c/1674",
+    "/elektronik/c/2286",
+    "/ev-yasam-eglence/c/2188",
+    "/katalog-urunleri-firsatlar/c/9000",
+    "/kampanyalar",
+    "/kataloglar"
+    ]
+    
+    for i in range(len(url_Extensions)):
+        
+        req = requests.get("https://www.carrefoursa.com" + url_Extensions[i] , verify=False)
+
+        if(req.status_code == 200):
+            SiteContent = req.content
+        else:
+            print("Request returned ", req.status_code)
+
+        arrangedHTML = BeautifulSoup(SiteContent, 'html.parser')
+        
+        #to get the price and the productname and the product ptice of the item
+        result = arrangedHTML.findAll('div',  {'class':'product_click'})
+    
+        for j in result:
+            productPrice = j.find('input',  {'name':'productPricePost'})['value']
+            productPrices.append(productPrice)
+
+            productName = j.find('input', {'name':'productNamePost'})['value']                      
+            productNames.append(productName)
+
+            productSku = j.find('input', {'name':'productCodePost'})['value']
+            productSkus.append(productSku)
+
+            productCategory = j.find('input', {'name':'productMainCategoryPost'})['value']
+            productCategories.append(productCategory)
+
+        productList = { #the dictionary to hold the arrays together
+            'productNames' : productNames,
+            'productPrices' : productPrices,
+            'productSkus' : productSkus,
+            'productCategories' : productCategories
+
+        
+        }
+        
+        #because all arrays are the same length we can use one of them as border range
+        for i in range(len(productList['productNames'])):
+        
+            date_of_price  = datetime.datetime.now()#datetime object for the seconf table holding price and date
+            
+            data = CarrefourData.get(productList['productSkus'][i])
+        
+            
+            if data == None or data != str(date_of_price):
+                redisTransfer.insertRedis(productList['productSkus'][i], str(date_of_price))
+                createTables.insert_to_postgre_price_data(productList['productSkus'][i], productList['productPrices'][i], str(date_of_price))
+            
+            if data  == None:
+                createTables.insert_to_postgre_all_data(productList['productNames'][i],productList['productSkus'][i], productList['productPrices'][i],productList['productCategories'][i])
+            
+            #else:
+            #    if (redisTransfer.isDuplicate(productList['productPrices'][i]) == False):
+                    #createTables.update_postgre(productList['productPrices'][i])
+                
+            
+if __name__ == '__main__':
+    main()
